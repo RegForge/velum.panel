@@ -108,23 +108,17 @@ _load_settings_file()
 from flask import Flask, request, jsonify, send_from_directory, g, has_request_context
 from flask_compress import Compress
 
-# Canonical Neon DSN â€” baked in so deploys work with zero env config.
-# Any stale DATABASE_URL pointing at the old Supabase project (IPv6-only,
-# unreachable from Vercel) is auto-corrected to Neon.
-_BAKED_DSN = "postgresql://neondb_owner:npg_3FKu9PbRHage@ep-quiet-hat-ay08l0i8.c-5.us-east-2.aws.neon.tech/neondb?sslmode=require"
+# No credentials in code - the Postgres DSN comes ONLY from the DATABASE_URL
+# env var (set it in the Render/Vercel dashboard). Unset = local SQLite.
 
 DB_URL = os.environ.get("DATABASE_URL", "").strip()
-if DB_URL and ".supabase.co" in DB_URL:
-    DB_URL = _BAKED_DSN
-elif not DB_URL and os.environ.get("VERCEL"):
-    DB_URL = _BAKED_DSN
 
 # Boot diagnostic: which DB did we resolve, and where did the URL come from.
 _pg_host = ""
 _m = re.match(r"postgres(?:ql)?://(?:[^:@/]+(?::[^@/]*)?@)?([^:/]+)", DB_URL) if DB_URL else None
 if _m:
     _pg_host = _m.group(1)
-_src = "env" if os.environ.get("DATABASE_URL") else ("baked" if DB_URL == _BAKED_DSN else "sqlite")
+_src = "env" if DB_URL else "sqlite"
 print("[PANEL] DB: %s (host=%s, src=%s)" % (
     "postgres" if DB_URL else "sqlite", _pg_host or "?", _src), flush=True)
 
@@ -1217,7 +1211,9 @@ _PLISIO_DEAD = ("expired", "cancelled", "error", "mismatch")
 
 
 def _plisio_key() -> str:
-    return (os.environ.get("PLISIO_API_KEY", "") or "").strip() or _settings_get("plisio_api_key")
+    # Env-only: set PLISIO_API_KEY in the Render/Vercel dashboard. Nothing is
+    # stored in the database or baked into code anymore.
+    return (os.environ.get("PLISIO_API_KEY", "") or "").strip()
 
 
 def _plisio_request(method: str, path: str, payload=None) -> dict:
@@ -1830,16 +1826,14 @@ def admin_payments_get():
 
 @app.post("/api/admin/payments")
 def admin_payments_set():
+    """The Plisio key is ENV-ONLY now (PLISIO_API_KEY in the Render/Vercel
+    dashboard). This endpoint is kept so the admin UI still reports status —
+    it no longer stores anything in the database."""
     role, _uname = _auth()
     if role != "admin":
         return jsonify({"error": "unauthorized"}), 403
-    d = request.get_json(force=True, silent=True) or {}
-    api_key = str(d.get("api_key") or "").strip()
-    if d.get("clear") or api_key.lower() == "clear":
-        _settings_set("plisio_api_key", "")
-    elif api_key:
-        _settings_set("plisio_api_key", api_key[:128])
-    return jsonify({"ok": True, "api_key_set": bool(_plisio_key())})
+    return jsonify({"ok": True, "api_key_set": bool(_plisio_key()),
+                    "note": "set PLISIO_API_KEY in the dashboard env vars"})
 
 
 @app.get("/api/admin/plisio-debug")
